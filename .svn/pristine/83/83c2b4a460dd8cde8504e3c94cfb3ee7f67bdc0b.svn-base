@@ -1,0 +1,24 @@
+#pragma once
+#include "stdio.h"
+#include "sys/time.h"
+#include "unistd.h"
+#include "stdlib.h"
+
+using namespace std;
+
+class m_timer
+{
+
+private:
+	timeval t_start;
+        timeval t_end;
+
+public:
+	void start(); // mark the start point
+	double end(); // mark the end point and return the running time
+
+public:
+	m_timer(void);
+	~m_timer(void);
+
+};

@@ -1,0 +1,689 @@
+#include "PALID.h"
+
+
+PALID::PALID(void)
+{
+}
+
+PALID::PALID(double _ek, m_LSH *_m_lsh)
+{
+	ek = _ek;
+	m_lsh = _m_lsh;
+	total_fea_num = m_lsh->getTotalFeaNum();
+	pmask = vector<bool>(total_fea_num, false);
+}
+
+
+PALID::~PALID(void)
+{
+}
+
+void PALID::initMembers( int _init_data_id, vector<bool>& _pmask )
+{	
+	// update <pmask>
+	for (int i = 0; i < pmask.size(); i++)
+	{
+		pmask[i] = pmask[i] | _pmask[i];
+	}
+
+	init_data_id = _init_data_id;
+
+	// initialize variables
+	DataDim = m_lsh->getDataDim();
+	
+	// clear variables
+	sp_A.clear();
+	sp_X.clear();
+	sp_AX.clear();
+
+	// allocate sp variables
+	sp_A   = MMatrix(total_fea_num, total_fea_num);
+	sp_X   = MVector(total_fea_num);
+	sp_AX  = MVector(total_fea_num);
+
+	sp_X.setElem(init_data_id, 1.0);
+	sp_AX.setElem(init_data_id, 0.5*NEAR_ZERO); // why? leon
+
+	densities = vector<double>();
+	densities.push_back(0.0);
+	iter_times = 0;
+}
+
+// use this method to run ALID only once to find one dominant cluster
+ClusterResult PALID::performALID( int _init_data_idx, vector<bool>& _pmask )
+{
+	// do initialization
+	initMembers(_init_data_idx, _pmask);
+
+	// start iteration
+	while (true)
+	{
+		// cout << "invasion start ..." << endl;
+		invasion();
+		// cout << "invasion end." << endl;
+		// printInfo();
+
+		// cout <<"assimilation start ..." << endl;
+		assimilation();
+		// cout << "assimilation end." << endl;
+		// printInfo();
+		
+		iter_times++;
+
+		// store the iterative track of densities
+		densities.push_back(D);
+
+		// show progress
+		if (verbose)
+		{
+			printf("************************************************\n");
+			printf("Iter times: %d   Current Density: %f \n", iter_times, D);
+			printf("************************************************\n");
+		}
+
+		// check out by density track in <densities>
+		double den_chg = densities[densities.size()-1] - densities[densities.size()-2];
+		if (den_chg < conv_thres)
+		{
+			break;
+		}
+	}
+
+	sp_AX.clear();
+	sp_A.clear();
+	
+	// assign cluster result and return
+	ClusterResult result;
+
+	result.density = densities[densities.size()-1];
+	result.data_id = sp_X.getKeys();
+	result.sp_X = sp_X;
+	return result;
+}
+
+// the invasion step for ALID
+void PALID::invasion()
+{
+	calcHyperBall();
+	
+	retrieveCatFea();
+
+	updateAAX();
+}
+
+// the assimilation step for ALID
+void PALID::assimilation()
+{
+	double old_D = -1.0;
+
+	int iter = 0;
+	
+	while (true)
+	{
+		iter++;
+
+		vector<int> spure = selectSpure();
+
+		if (spure.size() == 0)
+		{
+			break;
+		}
+
+		// check out by density change of <D>
+		double den_chg = D-old_D;
+		if (den_chg < shrink_tao)
+		{
+			break;
+		} else{
+			old_D = D;
+		}
+
+		compensatesp_A(spure);
+
+		performLID(spure);
+	}
+}
+
+// perform LID, the last step of <assimilation>
+void PALID::performLID( vector<int> _spure )
+{
+	// preparation
+	int sp_id = _spure[0];
+	int strg_type = _spure[1];
+	MVector ei = MVector(total_fea_num);
+	ei.setElem(sp_id, 1.0);
+
+	double PI_1 = sp_AX.getElem(sp_id) - D;
+	double PI_2 = -2.0*sp_AX.getElem(sp_id) + D;
+	double delta = 1.0;
+
+	// infective pure strategy condition
+	if (strg_type == 0)
+	{
+		if (PI_2 < 0)
+		{
+			delta = min(-1.0*PI_1/PI_2, 1.0);
+		}
+
+		// update <sp_X> and <sp_AX>
+		sp_X = ei.subtract(sp_X).multiply(delta).add(sp_X);
+
+		// assign <sp_AX> while keeping it clean
+		// assign <alpha_range>
+		for (set<int>::iterator iter = alpha_range.begin(); iter != alpha_range.end(); iter++)
+		{
+			double AX_rowvalue = sp_AX.getElem(*iter);
+			double new_AX_rowvalue = delta*(sp_A.getElem(*iter, sp_id) - AX_rowvalue) + AX_rowvalue;
+			sp_AX.setElem(*iter, new_AX_rowvalue);
+		}
+
+		// assign <cat_range>
+		for (set<int>::iterator iter = cat_range.begin(); iter != cat_range.end(); iter++)
+		{
+			double AX_rowvalue = sp_AX.getElem(*iter);
+			double new_AX_rowvalue = delta*(sp_A.getElem(*iter, sp_id) - AX_rowvalue) + AX_rowvalue;
+			sp_AX.setElem(*iter, new_AX_rowvalue);
+		}
+	}
+
+	// infective co-strategy condition
+	if (strg_type == 1)
+	{
+		double alpha = sp_X.getElem(sp_id)/(sp_X.getElem(sp_id)-1);
+		ei = ei.subtract(sp_X).multiply(alpha).add(sp_X);
+		PI_1 = alpha*PI_1;
+		PI_2 = alpha*alpha*PI_2;
+		if (PI_2 < 0)
+		{
+			delta = min(-1.0*PI_1/PI_2, 1.0);
+		}
+		// update <sp_X> and <sp_AX>
+		sp_X = ei.subtract(sp_X).multiply(delta).add(sp_X);
+
+		// assign <sp_AX> while keeping it clean
+		// assign <alpha_range>
+		for (set<int>::iterator iter = alpha_range.begin(); iter != alpha_range.end(); iter++)
+		{
+			double AX_rowvalue = sp_AX.getElem(*iter);
+			double new_AX_rowvalue = alpha*delta*(sp_A.getElem(*iter, sp_id) - AX_rowvalue) + AX_rowvalue;
+			sp_AX.setElem(*iter, new_AX_rowvalue);
+		}
+		// assign <cat_range>
+		for (set<int>::iterator iter = cat_range.begin(); iter != cat_range.end(); iter++)
+		{
+			double AX_rowvalue = sp_AX.getElem(*iter);
+			double new_AX_rowvalue = alpha*delta*(sp_A.getElem(*iter, sp_id) - AX_rowvalue) + AX_rowvalue;
+			sp_AX.setElem(*iter, new_AX_rowvalue);
+		}
+	}
+} // performLID()
+
+// compensate necessary column of A_beta_i in <sp_A>
+void PALID::compensatesp_A( vector<int> _spure )
+{
+	// check if compensation is neccesary
+	if (sp_X.getElem(_spure[0]) == 0)
+	{
+		// do compensation
+		int sp_id = _spure[0];
+
+		// block 1, the first alpha number of elements in <A_beta_i>, symmetrically copy
+		map<int, double> nz_X = sp_X.getNonzeroElemts();
+
+		for (map<int, double>::iterator iter  = nz_X.begin(); iter != nz_X.end(); iter++)
+		{
+			sp_A.setElem(iter->first, sp_id, sp_A.getElem(sp_id, iter->first));
+		}
+
+		// block 2, the rest of elements in <A_beta_i>, brute force compute
+		for(set<int>::iterator iter = cat_range.begin(); iter != cat_range.end(); iter++)
+		{
+			if (*iter != sp_id)
+			{
+				double L2Dist = calcL2Dist(*iter, sp_id);
+				double sim = exp(-1.0*ek*L2Dist);
+				sp_A.setElem(*iter, sp_id, sim);				
+			}			
+		}
+	}
+}
+
+// select the pure strategy ei or eibar. the returned value is int[2] = [global_idx, (indi=0 -> pure strg, indi=1 -> co-strg)]
+vector<int> PALID::selectSpure()
+{
+	// calculate the density
+	D = sp_X.innerProduct(sp_AX); // D = pi_beta(x), the local density
+
+	// select strategy
+	map<int, double> nz_AX = sp_AX.getNonzeroElemts();
+	map<int, double> abssub_vec;
+
+	// leon debug
+	// cout << "nz_AX size: " << nz_AX.size() << endl;
+
+	// damp for spure selection
+	double sub_damp = 0.0;
+	if (sub_damp_factor > 0.0)
+	{
+		sub_damp = exp(iter_times/sub_damp_factor)-1.0;
+	}
+
+	for (map<int, double>::iterator iter = nz_AX.begin(); iter != nz_AX.end(); iter++)
+	{
+		double sub = iter->second - D;
+		if (sub > sub_damp)
+		{
+			abssub_vec.insert(pair<int, double>(iter->first, sub));
+		}
+		if (sub < -sub_damp && sp_X.getElem(iter->first) > 0)
+		{
+			abssub_vec.insert(pair<int,double>(iter->first, -1.0*sub));
+		}
+		
+		// leon debug
+		// cout << "abssub_vec_size: " << abssub_vec.size() << endl;
+	}
+
+	// check out, if <abssub_vec> is empty
+	if (abssub_vec.size() <= 0)
+	{
+		if (verbose)
+		{
+			printf("Warning: <abssub_vec> is null in <selectSpure> !\n");
+		}
+		return vector<int>();
+	}
+
+	// choose strategy with max<abbssub_vec>
+	vector<int> spure(2, 0);
+
+	// find the max elem in <abssub_vec>, which is the <global_idx> of spure strg
+	double max_value = -1.0;
+	for (map<int, double>::iterator iter = abssub_vec.begin(); iter != abssub_vec.end(); iter++)
+	{
+		if (iter->second > max_value)
+		{
+			spure[0] =  iter->first;
+			max_value = iter->second;
+		}
+	}
+
+	if (nz_AX[spure[0]] > D)
+	{
+		spure[1] = 0; // its a pure infective strategy
+	} else {
+		spure[1] = 1; // its a infective co-strategy
+	}
+
+	if (verbose)
+	{
+		// printf("Max_abssub_value: %f\tSub_damp: %f\n", max_value, sub_damp);
+	}
+
+	return spure;
+}
+
+// calculates the hyper ball
+void PALID::calcHyperBall()
+{
+	// retrieve the <alpha_feature> of current cluster <sp_X>
+	alpha_range = sp_X.getKeys();
+
+	// calculate hyper ball center <C>
+	C = vector<double>(DataDim, 0.0);
+	
+	for (set<int>::iterator iter = alpha_range.begin(); iter != alpha_range.end(); iter++)
+	{
+		int data_dim = 0;
+		float *fea = m_lsh->getFea(*iter, data_dim);
+		double fea_weight = sp_X.getElem(*iter);
+		for (int i = 0; i < data_dim; i++)
+		{
+			C[i] += fea_weight*fea[i];
+		}
+	}
+
+	// calculate the current density <D>
+	D = sp_X.innerProduct(sp_AX);
+
+	// calculate <lambda_i> and <lambda_o>
+	vector<double> lambda_io = calcLambdaIO();
+
+	// calculate <R_in>, <R_out> and <R>
+	calcRiom(lambda_io);
+}
+
+// retrieve the <cat_feature>
+void PALID::retrieveCatFea()
+{
+	// first, retrieve support alpha id for hive search
+	set<int> alpha_id = sp_X.getKeys();
+
+	// second, do hive search for all NN_id
+	set<int> NN_id = m_lsh->queryLSH(alpha_id);
+
+	// third, filter <NN_id> to obtain <cat_id>. Find those in <NN_id> but not involved by current <sp_AX>
+	// AND: fourth, filter by <hyperball>
+	set<int> new_cat_range;
+	int retrieved_raw_size = 0;
+	for (set<int>::iterator iter = NN_id.begin(); iter != NN_id.end(); iter++)
+	{
+		int id = *iter;
+		if (!pmask[id] && cat_range.count(id)<=0 && alpha_range.count(id) <=0)
+		{
+			double L2Dist = calcL2Dist(id, C);
+			retrieved_raw_size++; // counting the raw size of retrieved features
+			
+			if (L2Dist <= R)
+			{
+				new_cat_range.insert(id);			
+			}
+		}
+	}
+
+	// update <cat_range>
+	cat_range = new_cat_range;
+
+	// show info
+	if (verbose)
+	{
+		printf("Retrieved list_catid size: %d\n", retrieved_raw_size);
+	}
+	
+	if (verbose)
+	{
+		printf("alpha_fea_num: %d     cat_fea_num: %d     R: %f\n", (int) alpha_range.size(), (int) cat_range.size(), R);
+	}
+}
+
+// update the affinity matrix <sp_A> and the multiply <sp_AX>. Use <alpha_feature> and <cat_feature>
+void PALID::updateAAX()
+{
+	// check for validation
+	if (cat_range.size() == 0)
+	{
+		if (verbose)
+		{
+			printf("Warning: <cat_range> is empty in <updateAAX> !\n");
+		}
+		return;
+	}
+
+    
+	// calc and assign <alpha*cat> sub mat from raw data 
+	for (set<int>::iterator alpha = alpha_range.begin(); alpha != alpha_range.end(); alpha++)
+	{
+		for (set<int>::iterator cat = cat_range.begin(); cat != cat_range.end(); cat++)
+		{
+			if (*alpha != *cat) // not diagonal
+			{
+				double dist = calcL2Dist((*alpha), (*cat));
+				double sim = exp(-1.0*ek*dist);
+				sp_A.setElem(*cat, *alpha, sim);
+			}
+		}
+	}
+
+	// leon debug
+	// printf("sp_A.size:%d\n ", sp_A.getCardinality());
+	// getchar();
+
+	// update the multiply <sp_AX>
+	sp_multiply();
+}
+
+/*********************************     Basic Utilities   *************************************/
+
+// calculates the <R_in>, <R_out> and <R>. Sequence: [i,o,m]
+void PALID::calcRiom( vector<double> Lambda_io )
+{
+	// in case of D=0.
+	if (D <= NEAR_ZERO)
+	{
+		R_in = r_limit;
+		R_out = r_limit;
+		R = r_limit;
+		return;
+	}
+
+	R_in = log(Lambda_io[0]/D)/ek;
+	R_out = log(Lambda_io[1]/D)/ek;
+	double rate = 1.0/(exp(4.0-iter_times/damp)+1);
+	R = R_in + rate*(R_out - R_in);
+	R = min(R, r_limit);
+}
+
+// calculates the <lambda_i> and <lambda_o>. [i,o]
+vector<double> PALID::calcLambdaIO()
+{
+	vector<double> lambda_io(2, 0.0);
+	
+	for(set<int>::iterator alpha = alpha_range.begin(); alpha != alpha_range.end(); alpha++)
+	{
+		double dist = calcL2Dist(*alpha, C);
+		
+		lambda_io[0] += exp(-1.0*ek*dist)*sp_X.getElem(*alpha); // lambda_i
+		lambda_io[1] += exp(1.0*ek*dist)*sp_X.getElem(*alpha); // lambda_o
+	}
+
+	return lambda_io;
+}
+
+/*
+vector<double> PALID::calcLambdaIO( map<int, double> L2Dists )
+{
+	vector<double> lambda_io(2, 0.0);
+
+	for (map<int, double>::iterator iter = L2Dists.begin(); iter != L2Dists.end(); iter++)
+	{
+		double dist = iter->second;
+
+		lambda_io[0] += exp(-1.0*ek*dist)*sp_X.getElem(iter->first); // lambda_i
+		lambda_io[1] += exp(1.0*ek*dist)*sp_X.getElem(iter->first); // lambda_o
+	}
+
+	return lambda_io;
+}
+*/
+
+// batch calculate the L2 distance between <fea_group> and <fea_single>. Key = global_fea_id, value = L2 distance.
+/*
+map<int, double> PALID::calcBatchL2Dist( set<int> feaid_group, int feaid_single )
+{
+	map<int, double> result;
+
+	vector<float> fea_single = m_lsh->getFea(feaid_single);
+
+	for (set<int>::iterator iter = feaid_group.begin(); iter != feaid_group.end(); iter++)
+	{
+		int fea_id = *iter;
+		if (sp_A.getElem(fea_id, feaid_single) > 0)
+		{
+			continue;
+		}
+
+		vector<float> fea_in_group = m_lsh->getFea(fea_id);
+
+		double L2dist = calcL2Dist(fea_in_group, fea_single);
+
+		result.insert(pair<int, double>(fea_id, L2dist));
+	}
+
+	return result;
+}
+
+// overide
+map<int, double> PALID::calcBatchL2Dist( set<int> feaid_group, vector<double> fea_single )
+{
+	map<int, double> result;
+
+	for (set<int>::iterator iter = feaid_group.begin(); iter != feaid_group.end(); iter++)
+	{
+		int fea_id = *iter;
+
+		vector<float> fea_in_group = m_lsh->getFea(fea_id);
+
+		double L2dist = calcL2Dist(fea_in_group, fea_single);
+
+		result.insert(pair<int, double>(fea_id, L2dist));
+	}
+
+	return result;
+}
+
+map<int, double> PALID::calcBatchL2Dist( set<int> feaid_group, vector<float> fea_single )
+{
+	map<int, double> result;
+
+	for (set<int>::iterator iter = feaid_group.begin(); iter != feaid_group.end(); iter++)
+	{
+		int fea_id = *iter;
+
+		double L2dist = calcL2Dist(fea_id, fea_single);
+
+		result.insert(pair<int, double>(fea_id, L2dist));
+	}
+
+	return result;
+}
+*/
+
+// calculate the L2 distance between <fea1> and <fea2>
+double PALID::calcL2Dist( int fea1_id, int fea2_id )
+{
+	double sum = 0.0;
+	int data_dim = 0;
+	float *fea1 = m_lsh->getFea(fea1_id, data_dim);
+	float *fea2 = m_lsh->getFea(fea2_id, data_dim);
+	for (int i = 0; i < data_dim; i++ )
+	{
+		double sub = fea1[i] - fea2[i];
+		sum += sub*sub;
+	}
+	return sqrt(sum);
+}
+
+double PALID::calcL2Dist( int fea1_id, vector<double> &fea2 )
+{
+	double sum = 0.0;
+	int data_dim = 0;
+	float *fea1 = m_lsh->getFea(fea1_id, data_dim);
+	for (int i = 0; i < data_dim; i++ )
+	{
+		double sub = fea1[i] - fea2[i];
+		sum += sub*sub;
+	}
+	return sqrt(sum);	
+}
+
+
+/*
+double PALID::calcL2Dist( vector<float> fea1, vector<float> fea2 )
+{
+	double sum = 0.0;
+
+	for (int i = 0; i <fea1.size(); i++)
+	{
+		double sub = fea1[i] - fea2[i];
+		sum += sub*sub;
+	}
+
+	return sqrt(sum);
+}
+
+double PALID::calcL2Dist( vector<float> fea1, vector<double> fea2 )
+{
+	double sum = 0.0;
+
+	for (int i = 0; i <fea1.size(); i++)
+	{
+		double sub = fea1[i] - fea2[i];
+		sum += sub*sub;
+	}
+
+	return sqrt(sum);
+}*/
+
+// accurately multily sp_AX = sp_A*sp_X
+void PALID::sp_multiply()
+{
+	// reset sp_AX
+	sp_AX = MVector(total_fea_num);
+
+	// leon debug
+	// cout << "sp_multiply start alpha_range size: " << alpha_range.size() << endl;
+	// cout << "sp_multiply start cat_range size: " << cat_range.size() << endl; 
+
+	// calcs the first <alpha_range> rows
+	for (set<int>::iterator row_id = alpha_range.begin(); row_id != alpha_range.end(); row_id++)
+	{
+		double sum = 0.0;
+		for (set<int>::iterator col_id = alpha_range.begin(); col_id != alpha_range.end(); col_id++)
+		{
+			sum += sp_A.getElem(*row_id, *col_id)*sp_X.getElem(*col_id);
+		}
+		sp_AX.setElem(*row_id, sum);
+	}
+
+	// calcs the second <cat_range> rows
+	for (set<int>::iterator row_id = cat_range.begin(); row_id != cat_range.end(); row_id++)
+	{
+		double sum = 0.0;
+		for (set<int>::iterator col_id = alpha_range.begin(); col_id != alpha_range.end(); col_id++)
+		{
+			sum += sp_A.getElem(*row_id, *col_id)*sp_X.getElem(*col_id);
+		}
+		sp_AX.setElem(*row_id, sum); // leon bug!: sp_AX <setElem> does not work in linux
+	}
+
+	// leon debug
+	// cout << "sp_multiply end sp_AX size: " << sp_AX.getCardinality() << endl;
+}
+
+int PALID::getTotalFeaNum()
+{
+	return total_fea_num;
+}
+
+void PALID::printInfo()
+{
+	cout << "******************************  PRINT INFO START  ****************************" << endl;
+	// print <sp_A>
+	cout << "***********   sp_A  **************" << endl;
+	for (int i = 0; i < total_fea_num; i++)
+	{
+		for (int j = 0; j < total_fea_num; j++)
+		{
+			printf("%1.4f\t", sp_A.getElem(i,j));
+		}
+		cout << endl;
+	}
+
+	// print <sp_X>
+	cout << "***********   sp_X  **************" << endl;
+	for (int i = 0; i < total_fea_num; i++)
+	{
+		printf("%1.4f\t", sp_X.getElem(i));
+	}
+	cout << endl;
+
+	// print <sp_AX>
+	cout << "***********   sp_AX  **************" << endl;
+	for (int i = 0; i < total_fea_num; i++)
+	{
+		printf("%1.4f\t", sp_AX.getElem(i));
+	}
+	cout << endl;
+
+	cout << "******************************  PRINT INFO END  ****************************" << endl;
+
+}
+
+
+
+
+
+
+
+
+

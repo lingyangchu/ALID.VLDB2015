@@ -1,0 +1,65 @@
+#pragma once
+
+#include "vector"
+#include "map"
+#include "set"
+#include "string.h"
+#include "stdlib.h"
+#include "stdio.h"
+#include "iostream"
+#include "fstream"
+#include "assert.h"
+#include "sstream"
+#include "time.h"
+#include "math.h"
+
+using namespace std;
+
+typedef string HASHKEY;
+#define HASHKEY_BIAS 4; // the bias to avoid negative key value, which takes 2 bytes in HASHKEY.
+
+class m_LSH
+{
+private: // internal variables
+	static const bool verbose = false; // true -> print info; false -> no print
+
+	// LSH related variables
+	int hashbits_num; // the number of bits for a hash key
+	int data_dim; // the dimension of data feature (hash vector)
+	int N; // the total number of data feature
+	int L; // the number of hash_families (hash tables)
+	double r; // the denominator of E2LSH
+	vector<double> b; // the random sampled scala for each hash function in [0,r]
+	vector<vector<double> > hash_family; // the hash function family
+	vector<map<HASHKEY, vector<unsigned int> > > m_tables; // the hash tables
+	float *features; // store all the N*data_dim data
+
+public: 
+	set<int> queryLSH(set<int> fea_ids); // query by <fea_ids> for NN feature ids
+
+	void performLSH();
+	void hashOneTable(int _l);
+	HASHKEY genBckKey(int fea_id, int hashfam_id);
+
+	void initHashFamilies(int _hashbits_num, int _L, double _r, int _data_dim, string hashpool_file, string WXpool_file);
+
+	float *readBin(string fileName, int &N, int &D); // read binary file <.bin>
+	void readBin(string fileName, int linenum, vector<vector<float> > &result); // <linenum> is the total num of lines to read
+	void normalizeFeature(vector<double> &fea);
+	void normalizeFeature(float *fea);
+
+	int getTotalFeaNum();
+	int getDataDim();
+
+	// substitution for B_fea_buf
+	float* getFea(int id, int &_data_dim);	
+
+	// sample for <init_ids>
+	vector<int> sampleInitIDs(int threshold, double sample_rate); // buckets with size bigger than <threshold> are sampled by <sample_rate> 
+
+public: // system methods
+	m_LSH(int _hashbits_num, int _L, double _r, string hashpool_file, string WXpool_file, string fea_filename);
+	m_LSH(void);
+	~m_LSH(void);
+};
+

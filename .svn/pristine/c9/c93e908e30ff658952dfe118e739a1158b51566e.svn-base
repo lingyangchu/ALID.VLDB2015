@@ -1,0 +1,37 @@
+#pragma once
+
+#include "set"
+#include "map"
+#include "stdio.h"
+#include "stdlib.h"
+#include "math.h"
+
+using namespace std;
+
+class MVector
+{
+private:
+	int DIM; // the vector global dimension
+	map<int, double> BUF; // the buffer to store all the vector elements	
+
+public:
+	set<int> getKeys(); // return a solid copy of the KEYS
+	void setElem(int id, double _value); // set element value
+	double getElem(int id); // get element value
+	int getCardinality(); // return the number of non-zero elements
+	int getDim(); // return the real dimension of the full vector
+	
+	MVector subtract(MVector Vec_B); // Vec_A.subtract(Vec_B)=Vec_A - Vec_B
+	MVector add(MVector Vec_B); // Vec_A.add(Vec_B) = Vec_A + Vec_B
+	MVector multiply(double factor); // element wise multiply by <factor>
+
+	map<int, double> getNonzeroElemts();
+	
+	double innerProduct(MVector Vec_B);
+
+public:
+	MVector(int _dim);
+	MVector(void);
+	~MVector(void);
+};
+

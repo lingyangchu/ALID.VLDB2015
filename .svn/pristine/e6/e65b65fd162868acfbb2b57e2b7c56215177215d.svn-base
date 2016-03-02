@@ -1,0 +1,295 @@
+#include "m_LSH.h"
+
+
+m_LSH::m_LSH(void)
+{
+}
+
+m_LSH::m_LSH( int _hashbits_num, int _L, double _r, string hashpool_file, string WXpool_file, string fea_filename )
+{
+	// read feature and assign <data_dim> and <N>
+	features = readBin(fea_filename, N, data_dim);
+
+	// do normalization
+	for (int i = 0; i < N; i++)
+	{
+		normalizeFeature(&features[i*data_dim]);
+	}
+	
+	// initialize hash families
+	initHashFamilies(_hashbits_num, _L, _r, data_dim, hashpool_file, WXpool_file);
+	
+	// initialize hash tables
+	m_tables = vector<map<HASHKEY, vector<unsigned int> > >(L);
+}
+
+m_LSH::~m_LSH(void)
+{
+	if (features != NULL)
+	{
+		delete[] features;
+		features = NULL;	
+	}
+}
+
+float *m_LSH::readBin( string fileName, int &N, int &D )
+{
+	// start reading
+	ifstream fin(fileName.c_str(), std::ios::binary);
+
+	fin.read((char*)&N, sizeof(int));
+	fin.read((char*)&D, sizeof(int));
+
+	float* buffer = new float[N*D];
+
+	fin.read((char*)buffer, N*D*sizeof(float));
+
+	fin.close();
+	
+	return buffer;
+}
+
+void m_LSH::readBin( string fileName, int linenum, vector<vector<float> > &result )
+{
+	// clear result
+	result.clear();
+	
+	// start reading
+	ifstream fin(fileName.c_str(), std::ios::binary);
+	int N,D;
+
+	fin.read((char*)&N, sizeof(int));
+	fin.read((char*)&D, sizeof(int));
+
+	N = min(N, linenum);
+
+	float* buffer = new float[N*D];
+
+	fin.read((char*)buffer, N*D*sizeof(float));
+
+	result = vector<vector<float> > (N);
+
+	for (int i = 0; i < N; i++)
+	{
+		for (int j = 0; j < D; j++)
+		{
+			result[i].push_back(buffer[i*D+j]);
+		}
+	}
+
+	delete[] buffer;
+	fin.close();
+}
+
+void m_LSH::initHashFamilies( int _hashbits_num, int _L, double _r, int _data_dim, string hashpool_file, string WXpool_file )
+{
+	// assign member variables
+	hashbits_num = _hashbits_num;
+	data_dim = _data_dim;
+	L = _L;
+	r = _r;
+
+	assert(hashbits_num <= sizeof(HASHKEY)*8);
+
+	// assign <b> randomly with uniform distribution
+	vector<vector<float> > WX_pool;
+	readBin(WXpool_file, hashbits_num*L, WX_pool);
+
+	b = vector<double>(hashbits_num*L, 0.0);
+	for (int i = 0; i < hashbits_num*L; i++)
+	{
+		b[i] = WX_pool[i][0]*r;
+	}
+
+	// assign <hash_family>
+	vector<vector<float> > hash_pool;
+	readBin(hashpool_file, hashbits_num*L, hash_pool);
+	hash_family = vector<vector<double> >(hashbits_num*L, vector<double>(data_dim, 0.0));
+	for (unsigned int i = 0; i < hashbits_num*L; i++)
+	{
+		for (unsigned int j = 0; j < data_dim; j++)
+		{
+			hash_family[i][j] = hash_pool[i][j];
+		}
+	}
+
+	// do normalization
+	for (int i = 0; i < hash_family.size(); i++)
+	{
+		normalizeFeature(hash_family[i]);
+	}
+
+	// free memory
+	vector<vector<float> >().swap(hash_pool);
+}
+
+void m_LSH::normalizeFeature( float *fea )
+{
+	double sqaure_sum = 0.0;
+
+	for (int i = 0; i < data_dim; i++)
+	{
+		sqaure_sum += fea[i]*fea[i];
+	}
+
+	double L2_norm = sqrt(sqaure_sum);
+
+	for (int i = 0; i < data_dim; i++)
+	{
+		fea[i] /= L2_norm;
+	}
+}
+
+void m_LSH::normalizeFeature( vector<double> &fea )
+{
+	double sqaure_sum = 0.0;
+
+	for (int i = 0; i < fea.size(); i++)
+	{
+		sqaure_sum += fea[i]*fea[i];
+	}
+
+	double L2_norm = sqrt(sqaure_sum);
+
+	for (int i = 0; i < fea.size(); i++)
+	{
+		fea[i] /= L2_norm;
+	}
+}
+
+HASHKEY m_LSH::genBckKey( int fea_id, int hashfam_id ) // simple LSH, not E2LSH
+{
+	HASHKEY m_key = "";
+	for (int i = hashfam_id*hashbits_num; i < (hashfam_id+1)*hashbits_num; i++)
+	{
+		// perform dot production
+		double sum = 0.0;
+		for (int j = 0; j < data_dim; j++)
+		{
+			sum += hash_family[i][j]*features[fea_id*data_dim + j];
+		}
+
+		// perform E2LSH hashing
+		int int_key = (int) floor((sum+b[i])/r);
+
+		// apply <HASHKEY_BIAS>
+		int_key += HASHKEY_BIAS;
+
+		// trans to string
+		stringstream trans;
+		trans << int_key;
+		string buf;
+		trans >> buf;
+
+		// update <m_key>
+		m_key += buf;
+	}
+
+	return m_key;
+}
+
+void m_LSH::hashOneTable( int _l )
+{
+	for (unsigned int i = 0; i < N; i++)
+	{
+		HASHKEY m_key = genBckKey(i, _l);
+
+		// update <m_tables>
+		map<HASHKEY, vector<unsigned int> >::iterator m_iter;
+		m_iter = m_tables[_l].find(m_key);
+		if (m_iter != m_tables[_l].end())
+		{
+			m_iter->second.push_back(i);
+		}
+		else{
+			vector<unsigned int> buf(1, i);
+			m_tables[_l].insert(pair<HASHKEY, vector<unsigned int> >(m_key, buf));
+		}
+	}
+}
+
+void m_LSH::performLSH()
+{	
+	#pragma omp parallel for num_threads(8)
+	for (int i = 0; i < L; i++)
+	{
+		hashOneTable(i);
+	}
+}
+
+int m_LSH::getTotalFeaNum()
+{
+	return N;
+}
+
+int m_LSH::getDataDim()
+{
+	return data_dim;
+}
+
+set<int> m_LSH::queryLSH( set<int> fea_ids )
+{
+	set<int> NN_ids;
+
+	for (set<int>::iterator m_iter = fea_ids.begin(); m_iter != fea_ids.end(); m_iter++)
+	{
+		int cur_fea_id = (int) (*m_iter);
+
+		for (int i = 0; i < L; i++)
+		{
+			HASHKEY m_key = genBckKey(cur_fea_id, i);
+
+			if (m_tables[i].count(m_key) > 0)
+			{
+				NN_ids.insert(m_tables[i][m_key].begin(), m_tables[i][m_key].end());
+			}
+		}
+	}
+
+	return NN_ids;
+}
+
+vector<float> m_LSH::getFea( int id ) // Leon: should be refined later for memory saving purpose
+{
+	vector<float> fea(data_dim, 0);
+	
+	for(int i = 0; i < data_dim; i++)
+	{
+		fea[i] = features[id*data_dim+i];
+	}
+	return fea;
+}
+
+vector<int> m_LSH::sampleInitIDs( int threshold, double sample_rate )
+{
+	srand(time(NULL));
+	// only sample the first hash table is enough
+	vector<int> init_IDs;
+	map<HASHKEY, vector<unsigned int> >::iterator iter;
+	
+	for (iter = m_tables[0].begin(); iter != m_tables[0].end(); iter++)
+	{
+		int bck_size = iter->second.size();
+		int sample_num = (int) (sample_rate*bck_size);
+		int rest_size = bck_size;
+		if (bck_size > threshold)
+		{
+			int idx = 0;
+			while (sample_num > 0 && idx < bck_size)
+			{
+				double roll_dice = 1.0*rand()/RAND_MAX;
+				if (roll_dice <= 1.0*sample_num/rest_size)
+				{
+					init_IDs.push_back(iter->second[idx]); // sample one
+					sample_num--;
+				}
+				rest_size--;
+				idx++;
+			}
+		}
+	}
+
+	return init_IDs;
+}
+
+

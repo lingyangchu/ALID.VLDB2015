@@ -1,0 +1,145 @@
+#include "MVector.h"
+
+MVector::MVector( int _dim )
+{
+	DIM = _dim;
+}
+
+MVector::MVector( void )
+{
+
+}
+
+MVector::~MVector(void)
+{
+}
+
+set<int> MVector::getKeys()
+{
+	set<int> KEYS;
+
+	map<int, double>::iterator iter;
+
+	for (iter = BUF.begin(); iter != BUF.end(); iter++)
+	{
+		KEYS.insert(iter->first);
+	}
+
+	return KEYS;
+}
+
+void MVector::setElem( int id, double _value )
+{
+	if (id >= DIM || id < 0)
+	{
+		printf("Illegal Vector INdex in MVector! Exit ... setElem()");
+		exit(0);
+	}
+
+	double abs_value = fabs(_value);
+
+	if (abs_value >= 1e-10) // non-zero
+	{
+		BUF[id] = _value;
+	}
+	else if (BUF.count(id) > 0) // zero
+	{
+		BUF.erase(id);
+	}
+}
+
+double MVector::getElem( int id )
+{
+	if (id >= DIM || id < 0)
+	{
+		printf("Illegal Vector Index in MVector! Exit ... getElem()");
+		exit(0);
+	}
+
+	if (BUF.count(id) > 0)
+	{
+		return BUF[id];
+	} else {
+		return 0.0;
+	}
+}
+
+int MVector::getCardinality()
+{
+	return BUF.size();
+}
+
+MVector MVector::subtract( MVector Vec_B )
+{
+	set<int> ID_AB = this->getKeys(); // get A-keys
+	set<int> ID_B   = Vec_B.getKeys(); // get B-keys
+	ID_AB.insert(ID_B.begin(), ID_B.end()); // merge AB-keys
+
+	MVector result(this->DIM);
+	for (set<int>::iterator iter = ID_AB.begin(); iter != ID_AB.end(); iter++)
+	{
+		double value = this->getElem(*iter) - Vec_B.getElem(*iter);
+		result.setElem(*iter, value);
+	}
+
+	return result;
+}
+
+MVector MVector::add( MVector Vec_B )
+{
+	set<int> ID_AB = this->getKeys(); // get A-keys
+	set<int> ID_B   = Vec_B.getKeys(); // get B-keys
+	ID_AB.insert(ID_B.begin(), ID_B.end()); // merge AB-keys
+
+	MVector result(this->DIM);
+	for (set<int>::iterator iter = ID_AB.begin(); iter != ID_AB.end(); iter++)
+	{
+		double value = this->getElem(*iter) + Vec_B.getElem(*iter);
+		result.setElem(*iter, value);
+	}
+
+	return result;
+}
+
+MVector MVector::multiply( double factor )
+{
+	MVector result(this->DIM);
+	for (map<int, double>::iterator iter = BUF.begin(); iter !=BUF.end(); iter++)
+	{
+		double value = BUF[iter->first]*factor;
+		result.setElem(iter->first, value);
+	}
+
+	return result;
+}
+
+map<int, double> MVector::getNonzeroElemts()
+{
+	return BUF;
+}
+
+double MVector::innerProduct( MVector Vec_B )
+{
+	set<int> ID_AB = this->getKeys(); // get A-keys
+	set<int> ID_B   = Vec_B.getKeys(); // get B-keys
+	ID_AB.insert(ID_B.begin(), ID_B.end()); // merge AB-keys
+
+	double result = 0.0;
+	for (set<int>::iterator iter = ID_AB.begin(); iter != ID_AB.end(); iter++)
+	{
+		result += this->getElem(*iter) * Vec_B.getElem(*iter);
+	}
+
+	return result;
+}
+
+int MVector::getDim()
+{
+	return DIM;
+}
+
+
+
+
+
+

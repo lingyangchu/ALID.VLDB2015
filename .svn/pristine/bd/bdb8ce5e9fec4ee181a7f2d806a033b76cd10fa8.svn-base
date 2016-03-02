@@ -1,0 +1,253 @@
+#include "ALID_RUNNER.h"
+
+ALID_RUNNER::ALID_RUNNER( double _ek, m_LSH *_hash_database )
+{
+	ek = _ek;
+	hash_database = _hash_database;
+
+	time_sequentialALID = 0;
+	time_sequentialALIDWithSample = 0;
+	time_parallelALIDWithSample = 0;
+}
+
+ALID_RUNNER::~ALID_RUNNER(void)
+{
+}
+
+void ALID_RUNNER::sequentialALID(string output_file)
+{
+	cout << "Running <sequentialALID> ..." << endl;
+
+	// start timming
+	m_timer TT;
+	TT.start();
+
+	// initialize PALID object
+	PALID m_palid(ek, hash_database);
+
+	// true randomize
+	srand(time(NULL));
+
+	// init parameters
+	int init_idx = 0;
+	int clus_count = 1; // cluster ID starts from 1
+	int total_fea_num = hash_database->getTotalFeaNum();
+	int rest_fea = total_fea_num;
+
+	// buffers of clustering results
+	vector<int> DBelong(total_fea_num, 0);
+	vector<double> Density(total_fea_num, 0.0);
+
+	// initialize <pmask>
+	vector<bool> pmask(hash_database->getTotalFeaNum(), false);
+
+	while (rest_fea > 0)
+	{
+		cout << "********************************************" << endl;
+		cout << "Rest Fea Num: " << rest_fea << endl;
+
+		// select <init_idx>
+		int rand_idx = (int) floor(1.0*rand()*rest_fea/RAND_MAX);
+		for (int i = 0; i < pmask.size(); i++)
+		{
+			if (pmask[i] == false)
+			{
+				if (rand_idx == 0)
+				{
+					init_idx = i;
+				}
+				rand_idx--;
+			}
+		}
+
+		// perform ALID with <init_idx> to find one cluster
+		ClusterResult result = m_palid.performALID(init_idx, pmask);
+		cout << "Cluster " << clus_count << " size: " << result.data_id.size() << endl;
+		getchar();
+
+		// update <DBelong> and <Density>
+		for (set<int>::iterator iter = result.data_id.begin(); iter != result.data_id.end(); iter++)
+		{
+			if (result.data_id.size() > 1)
+			{
+				DBelong[*iter] = clus_count;
+				Density[*iter] = result.density;
+			}
+
+			if (pmask[*iter] == false)
+			{
+				rest_fea--;
+			}
+
+			pmask[*iter] = true;
+		}
+
+		clus_count++;
+	}
+
+	// output result
+	ofstream out(output_file.c_str(), ios::out);
+	if (out.is_open())
+	{
+		for (int i = 0; i < DBelong.size(); i++)
+		{
+			out << DBelong[i] << " " << Density[i] << endl;
+		}
+		out.close();
+	}
+	else{
+		cout << "Error! Can not open file: " << output_file << endl;
+	}
+
+	// end timming
+	time_sequentialALID = TT.end();
+	cout << "time_sequentialALID: " << time_sequentialALID << " secs" << endl;
+}
+
+void ALID_RUNNER::sequentialALIDWithSample( string output_file, int _threshold, float _sample_rate )
+{
+	cout << "Running <sequentialALIDWithSample> ..." << endl;
+
+	// start timming
+	m_timer TT;
+	TT.start();
+
+	// initialize PALID object
+	PALID m_palid(ek, hash_database);
+
+	// true randomize
+	srand(time(NULL));
+
+	// init parameters
+	vector<int> init_IDs = hash_database->sampleInitIDs(_threshold, _sample_rate);
+	int clus_count = 1; // cluster ID starts from 1
+	int total_fea_num = hash_database->getTotalFeaNum();
+
+	// buffers of clustering results
+	vector<int> DBelong(total_fea_num, -1); // noise are marked by <-1>
+	vector<double> Density(total_fea_num, 0.0);
+
+	// initialize <pmask>
+	vector<bool> pmask(hash_database->getTotalFeaNum(), false);
+
+	for (int i = 0; i < init_IDs.size(); i++)
+	{
+		int init_ID = init_IDs[i];
+		if (pmask[init_ID] == true) // already peeled off
+		{
+			continue;
+		}
+
+		// perform ALID with <init_idx> to find one cluster
+		ClusterResult result = m_palid.performALID(init_ID, pmask);
+		// cout << "Cluster " << clus_count << " size: " << result.data_id.size() << endl;
+
+		// update <DBelong> and <Density>
+		for (set<int>::iterator iter = result.data_id.begin(); iter != result.data_id.end(); iter++)
+		{
+			if (result.data_id.size() > 1)
+			{
+				DBelong[*iter] = clus_count;
+				Density[*iter] = result.density;
+			}
+			pmask[*iter] = true;
+		}
+
+		clus_count++;
+	}
+
+	// output result
+	ofstream out(output_file.c_str(), ios::out);
+	if (out.is_open())
+	{
+		for (int i = 0; i < DBelong.size(); i++)
+		{
+			out << DBelong[i] << " " << Density[i] << endl;
+		}
+		out.close();
+	}
+	else{
+		cout << "Error! Can not open file: " << output_file << endl;
+	}
+
+	// end timming
+	time_sequentialALIDWithSample = TT.end();
+	cout << "time_sequentialALIDWithSample: " << time_sequentialALIDWithSample << " secs" << endl;
+}
+
+void ALID_RUNNER::parallelALIDWithSample(int num_cores, string output_file, int _threshold, float _sample_rate )
+{
+	cout << "Running <parallelALIDWithSample> ..." << endl;
+	
+	// start timming
+	m_timer TT;
+	TT.start();	
+
+	// true randomize
+	srand(time(NULL));
+
+	// init parameters
+	vector<int> init_IDs = hash_database->sampleInitIDs(_threshold, _sample_rate);
+	int clus_count = 1; // cluster ID starts from 1
+	int total_fea_num = hash_database->getTotalFeaNum();
+
+	// buffers of clustering results
+	vector<int> DBelong(total_fea_num, -1); // noise are marked by <-1>
+	vector<double> Density(total_fea_num, 0.0);
+
+	// initialize <pmask>
+	vector<bool> pmask(total_fea_num, false);
+
+	cout << "init_IDs.size: " << init_IDs.size() << endl;
+
+	#pragma omp parallel for num_threads(num_cores) shared(clus_count, DBelong, Density, pmask, init_IDs)
+	for (int i = 0; i < init_IDs.size(); i++)
+	{
+		// cout << i << endl;
+		int init_ID = init_IDs[i];
+		if (pmask[init_ID] == true) // already peeled off
+		{
+			continue;
+		}
+
+		// perform ALID with <init_idx> to find one cluster
+		PALID m_palid = PALID(ek, hash_database);
+		ClusterResult result = m_palid.performALID(init_ID, pmask);
+
+		// cout <<"ID: " << i << "  Cluster " << clus_count << " size: " << result.data_id.size() << endl;
+
+		// update <DBelong> and <Density>
+		for (set<int>::iterator iter = result.data_id.begin(); iter != result.data_id.end(); iter++)
+		{
+			if (result.data_id.size() > 1)
+			{
+				if (result.density > Density[*iter])
+				{
+					DBelong[*iter] = clus_count;
+					Density[*iter] = result.density;
+				}
+			}
+			pmask[*iter] = true;
+		}
+
+		clus_count++;
+	}
+
+	// output result
+	ofstream out(output_file.c_str(), ios::out);
+	if (out.is_open())
+	{
+		for (int i = 0; i < DBelong.size(); i++)
+		{
+			out << Density[i] << " " << DBelong[i] << endl;
+		}
+		out.close();
+	}
+	else{
+		cout << "Error! Can not open file: " << output_file << endl;
+	}
+
+	// end timming
+	time_parallelALIDWithSample = TT.end();
+	cout << "time_parallelALIDWithSample: " << time_parallelALIDWithSample << " secs" << endl;
+}

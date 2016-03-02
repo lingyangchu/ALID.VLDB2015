@@ -1,0 +1,27 @@
+#pragma once
+#include <map>
+
+using namespace std;
+
+class MMatrix
+{
+private:
+	int row; // the matrix row number
+	int col; // the matrix column number
+
+	map<int, double> buf; // the buf to store all matrix elements
+
+	int genKey(int _rowidx, int _colidx); // matlab sequence column-wise order
+
+public:
+	void clear(); // clear the matrix to empty
+	void setElem(int _rowidx, int _colidx, double value);
+	double getElem(int _rowidx, int _colidx);
+
+
+public:
+	MMatrix(int _row, int _col);
+	MMatrix(void);
+	~MMatrix(void);
+};
+

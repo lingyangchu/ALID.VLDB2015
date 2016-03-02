@@ -1,0 +1,104 @@
+#ifndef _PALID_H_
+#define _PALID_H_
+
+#include "MVector.h"
+#include "MMatrix.h"
+#include "m_LSH.h"
+#include <map>
+#include <set>
+#include "math.h"
+#include "time.h"
+
+using namespace std;
+
+struct ClusterResult{
+	double density;
+	set<int> data_id;
+	MVector sp_X;
+};
+
+/********************  Configuration  ************************/
+static double shrink_tao = 1e-8; // 1e-8
+static double conv_thres = 1e-5; // 1e-5
+static double NEAR_ZERO = 1e-10; // 1e-10
+
+static double r_limit = 0.4;
+static double damp = 2.0;
+
+static bool verbose = false; // true -> print info. false -> silent
+static double sub_damp_factor = 0.0; // [100, 200, 300 ...]. damp_factor = 0.0 kills the sub_damp function
+
+class PALID
+{
+public:
+	ClusterResult clus_result; // the clustering result of this object
+	m_LSH *m_lsh; // the LSH database. Not initizlized yet !! 
+
+	/********************  Variables  ************************/
+private:
+	double ek;                              // the <ek> scale parameter for laplacian kernel
+	int total_fea_num;              // the total number of features
+	int init_data_id;                  // the id the the seed point
+
+public:
+	vector<bool> pmask;                     // the mask to identify peeled of data. True->peeled. False->Not.
+	
+	// feature buffer
+private:
+	set<int> alpha_range;       // the current support feature idx of range [alpha]
+	set<int> cat_range;          // the additional feature idx included by hyperball ROI, cat = [beta - alpha]
+	int DataDim;                     // the dimension of features
+
+	
+private:
+	// for invasion-assimilation
+	MMatrix sp_A;                  // the sparse affinity matrix <A>
+	MVector sp_X;                  // the sparse column vector <X>
+	MVector sp_AX;                // the sparse column vector <A*X>
+	vector<double> densities;   // stores all densities obtained along the trace of iteration
+	int iter_times;                   // the iteration times. Equal to the length of <densities>
+
+	// for hyperball
+	vector<double> C;              // the hyperball center with length <DataDim>
+	double D;                            // the current density of the current cluster <sp_X>
+	double R_in;                        // the inner hyper ball radius
+	double R_out;                     // the out hyper ball radius
+	double R;                            // the middle hyper ball radius
+
+	/********************  Utilities  ************************/
+private:
+	void initMembers(int _init_data_id, vector<bool>& _pmask);
+	void invasion();
+	void assimilation();
+	void performLID(vector<int> _spure);
+	void compensatesp_A(vector<int> _spure);
+	vector<int> selectSpure();
+	void calcHyperBall();
+	void retrieveCatFea();
+	void updateAAX();
+	void calcRiom(vector<double> Lambda_io);
+	vector<double> calcLambdaIO(map<int, double> L2Dists);
+	void sp_multiply();
+
+
+public:
+	ClusterResult performALID(int _init_data_idx, vector<bool>& _pmask);
+
+	// distance tools
+	map<int, double> calcBatchL2Dist(set<int> feaid_group, int feaid_single);
+	map<int, double> calcBatchL2Dist(set<int> feaid_group, vector<double> fea_single);
+	map<int, double> calcBatchL2Dist(set<int> feaid_group, vector<float> fea_single);
+	double calcL2Dist(vector<float> fea1, vector<float> fea2);
+	double calcL2Dist(vector<float> fea1, vector<double> fea2);
+
+	// other utils
+	int getTotalFeaNum();
+	void printInfo(); // for debug use. Print <sp_A>, <sp_AX> and <sp_X> for further check
+
+public:
+	PALID(double _ek, m_LSH *_m_lsh);
+	PALID(void);
+	~PALID(void);
+};
+
+#endif

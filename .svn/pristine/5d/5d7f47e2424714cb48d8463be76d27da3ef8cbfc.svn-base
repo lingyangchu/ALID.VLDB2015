@@ -1,0 +1,28 @@
+// this class <ALID_RUNNER> handles all the running issues of ALID
+#pragma once
+#include "PALID.h"
+#include "m_timer.h"
+
+using namespace std;
+
+class ALID_RUNNER
+{
+private:
+	double ek;
+	m_LSH* hash_database;
+	
+public: // Timing in second
+	double time_sequentialALID;
+	double time_sequentialALIDWithSample;
+	double time_parallelALIDWithSample;
+
+public:
+	void sequentialALID(string output_file);  // run ALID in sequential mode and export the clustering result into <output file>
+	void sequentialALIDWithSample(string output_file, int _threshold, float _sample_rate); // run ALID in sequential mode using LSH sample trick
+	void parallelALIDWithSample(int num_cores, string output_file, int _threshold, float _sample_rate);
+
+public:
+	ALID_RUNNER(double _ek, m_LSH *_hash_database);
+	~ALID_RUNNER(void);
+};
+

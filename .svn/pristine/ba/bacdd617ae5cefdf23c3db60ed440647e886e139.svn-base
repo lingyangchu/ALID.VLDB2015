@@ -1,0 +1,49 @@
+#include "MMatrix.h"
+
+
+MMatrix::MMatrix(int _row, int _col)
+{
+	row = _row;
+	col  = _col;
+}
+
+MMatrix::MMatrix( void )
+{
+
+}
+
+MMatrix::~MMatrix(void)
+{
+}
+
+int MMatrix::genKey( int _rowidx, int _colidx )
+{
+	int key = _colidx*row + _rowidx;
+	return key;
+}
+
+void MMatrix::clear()
+{
+	buf.clear();
+}
+
+void MMatrix::setElem( int _rowidx, int _colidx, double value )
+{
+	int key = genKey(_rowidx, _colidx);
+	buf[key] = value;
+}
+
+double MMatrix::getElem( int _rowidx, int _colidx )
+{
+	int key = genKey(_rowidx, _colidx);
+
+	if (buf.count(key) > 0)
+	{
+		return buf[key];
+	} else
+	{
+		return 0.0;
+	}
+}
+
+
