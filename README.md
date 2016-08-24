@@ -1,3 +1,5 @@
+This is the source code for the ALID algorithm published in our VLDB 2015 paper: "ALID: Scalable dominant cluster detection"
+
 1) This code is compiled with g++ on Ubuntu 14.04. To compile this code, use "make clean & make". Thread level parallelism with openmp is built in.
 
 2) After succesfully compiling the code, run the demo simply with command "./RUN". Use "./RUN -h" to see the manual. 
